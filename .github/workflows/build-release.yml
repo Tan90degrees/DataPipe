@@ -114,30 +114,33 @@ jobs:
 
       - name: Build Master service
         env:
-          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
-          GOARCH: ${{ split(matrix.platform, '/')[1] }}
           CGO_ENABLED: 0
         run: |
+          PlatForm="${{ matrix.platform }}"
+          IFS='/' read -r GOOS GOARCH <<< "$PlatForm"
+          export GOOS GOARCH
           mkdir -p dist/${{ matrix.platform }}/master
           go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/master/datapipe-master \
             ./cmd/master
 
       - name: Build Worker service
         env:
-          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
-          GOARCH: ${{ split(matrix.platform, '/')[1] }}
           CGO_ENABLED: 0
         run: |
+          PlatForm="${{ matrix.platform }}"
+          IFS='/' read -r GOOS GOARCH <<< "$PlatForm"
+          export GOOS GOARCH
           mkdir -p dist/${{ matrix.platform }}/worker
           go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/worker/datapipe-worker \
             ./cmd/worker
 
       - name: Build CLI tool
         env:
-          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
-          GOARCH: ${{ split(matrix.platform, '/')[1] }}
           CGO_ENABLED: 0
         run: |
+          PlatForm="${{ matrix.platform }}"
+          IFS='/' read -r GOOS GOARCH <<< "$PlatForm"
+          export GOOS GOARCH
           mkdir -p dist/${{ matrix.platform }}/cli
           EXTENSION=${{ matrix.platform == 'windows/amd64' && '.exe' || '' }}
           go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/cli/datapipe-cli${EXTENSION} \
@@ -383,7 +386,15 @@ jobs:
           echo "::error title=Build Failed::DataPipe build failed. Please check the logs for details."
 
       - name: Discord notification
-        if: ${{ secrets.DISCORD_WEBHOOK != '' && (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.create-release.result == 'success' }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "Discord webhook not configured, skipping notification"
+            exit 0
+          fi
+          echo "::notice title=Discord::Sending Discord notification..."
         uses: sarisia/actions-token-discord@v1
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
@@ -409,7 +420,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Platforms Built" >> $GITHUB_STEP_SUMMARY
           for platform in ${{ fromJson(needs.prepare.outputs.platforms) }}; do
-            echo "- \`${{ platform }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$platform\`" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Job Status" >> $GITHUB_STEP_SUMMARY
