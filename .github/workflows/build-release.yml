@@ -41,6 +41,7 @@ jobs:
       is_release: ${{ steps.vars.outputs.is_release }}
       is_tag: ${{ steps.vars.outputs.is_tag }}
       platforms: ${{ steps.matrices.outputs.platforms }}
+      image_name_lower: ${{ steps.vars.outputs.image_name_lower }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,6 +49,9 @@ jobs:
       - name: Set up build variables
         id: vars
         run: |
+          IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          echo "image_name_lower=${IMAGE_NAME_LOWER}" >> $GITHUB_OUTPUT
+          
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "build_type=${{ inputs.build_type }}" >> $GITHUB_OUTPUT
             echo "release_version=${{ inputs.release_version }}" >> $GITHUB_OUTPUT
@@ -259,7 +263,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}
           tags: |
             type=semver,pattern={{version}}
             type=sha,prefix=
@@ -272,7 +276,7 @@ jobs:
           file: deploy/docker/Dockerfile.master
           platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/master:${{ needs.prepare.outputs.release_version }}
+          tags: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}/master:${{ needs.prepare.outputs.release_version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -284,7 +288,7 @@ jobs:
           file: deploy/docker/Dockerfile.worker
           platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ needs.prepare.outputs.release_version }}
+          tags: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}/worker:${{ needs.prepare.outputs.release_version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
