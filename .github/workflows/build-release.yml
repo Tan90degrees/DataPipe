@@ -40,6 +40,7 @@ jobs:
       release_version: ${{ steps.vars.outputs.release_version }}
       is_release: ${{ steps.vars.outputs.is_release }}
       is_tag: ${{ steps.vars.outputs.is_tag }}
+      platforms: ${{ steps.matrices.outputs.platforms }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
