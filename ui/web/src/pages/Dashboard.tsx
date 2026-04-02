@@ -1,20 +1,35 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Tag, Spin } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { systemApi } from '../api/system';
-import type { Execution } from '../types/execution';
+
+interface DashboardStats {
+  totalPipelines: number;
+  activePipelines: number;
+  totalExecutions: number;
+  successRate: number;
+  runningPipelines: number;
+  recentExecutions: Array<{
+    id: string;
+    pipelineId: string;
+    pipelineName: string;
+    status: string;
+    startTime: string;
+    duration?: number;
+  }>;
+}
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<DashboardStats>({
     totalPipelines: 0,
     activePipelines: 0,
     totalExecutions: 0,
     successRate: 0,
     runningPipelines: 0,
-    recentExecutions: [] as Execution[],
+    recentExecutions: [],
   });
 
   useEffect(() => {

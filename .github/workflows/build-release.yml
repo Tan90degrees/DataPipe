@@ -150,19 +150,15 @@ jobs:
 
       - name: Create package
         run: |
-          PACKAGE_NAME="datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}"
           cd dist/${{ matrix.platform }}
-
           case "${{ matrix.platform }}" in
             windows/amd64)
-              zip -r "${PACKAGE_NAME}.zip" master worker cli
+              zip -r datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}.zip master worker cli
               ;;
             *)
-              tar -czf "${PACKAGE_NAME}.tar.gz" ./master ./worker ./cli
+              tar -czf datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}.tar.gz ./master ./worker ./cli
               ;;
           esac
-
-          echo "package_name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

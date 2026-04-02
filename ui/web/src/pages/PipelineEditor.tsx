@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { Card, Button, Space, message, Tabs, DragableNodeList, Empty } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Card, Button, Space, message, Empty } from 'antd';
 import { SaveOutlined, CheckCircleOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { pipelineApi } from '../api/pipeline';
@@ -25,7 +25,7 @@ const PipelineEditor: React.FC = () => {
   const [nodes, setNodes] = useState<PipelineNode[]>([]);
   const [edges, setEdges] = useState<PipelineEdge[]>([]);
   const [selectedNode, setSelectedNode] = useState<PipelineNode | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {

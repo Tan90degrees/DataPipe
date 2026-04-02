@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState } from 'react';
 import { Card, Empty, Spin } from 'antd';
 import type { PipelineNode, PipelineEdge } from '../types/pipeline';
 

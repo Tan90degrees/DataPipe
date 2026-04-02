@@ -1,11 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Input, Select, DatePicker, Button, Space, Tag, Row, Col, Spin, message } from 'antd';
-import { SearchOutlined, ReloadOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
+import { Card, Table, Input, Select, Button, Space, Tag, Row, Col, message } from 'antd';
+import { SearchOutlined, ReloadOutlined, DownloadOutlined } from '@ant-design/icons';
 import { executionApi } from '../api/execution';
 import type { ExecutionLog } from '../types/execution';
-import type { Dayjs } from 'dayjs';
-
-const { RangePicker } = DatePicker;
 
 const Logs: React.FC = () => {
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
@@ -24,15 +21,15 @@ const Logs: React.FC = () => {
   const loadLogs = async () => {
     try {
       setLoading(true);
-      const response = await executionApi.searchLogs({
+      const data = await executionApi.searchLogs({
         page,
         pageSize,
         level: levelFilter !== 'all' ? levelFilter : undefined,
         keyword: keyword || undefined,
         executionId,
       });
-      setLogs(response.logs);
-      setTotal(response.total);
+      setLogs(data.logs);
+      setTotal(data.total);
     } catch (error) {
       console.error('Failed to load logs:', error);
     } finally {
@@ -51,13 +48,17 @@ const Logs: React.FC = () => {
         executionId,
         format: 'csv',
       });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `logs_${Date.now()}.csv`;
-      a.click();
-      window.URL.revokeObjectURL(url);
-      message.success('导出成功');
+      if (blob instanceof Blob) {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `logs_${Date.now()}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        message.success('导出成功');
+      } else {
+        message.error('导出失败');
+      }
     } catch {
       message.error('导出失败');
     }

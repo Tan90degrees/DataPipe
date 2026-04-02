@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Table, Tag, Button, Space, Select, Row, Col, Statistic, Spin, Badge } from 'antd';
-import { PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons';
 import { executionApi } from '../api/execution';
 import type { Execution, ExecutionMetrics, ExecutionStatus } from '../types/execution';
 
@@ -17,12 +17,12 @@ const Monitor: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [executionsRes, metricsRes] = await Promise.all([
+      const [executionsData, metricsData] = await Promise.all([
         executionApi.list(statusFilter !== 'all' ? { status: statusFilter } : undefined),
         executionApi.metrics(),
       ]);
-      setExecutions(executionsRes.executions);
-      setMetrics(metricsRes);
+      setExecutions(executionsData.executions);
+      setMetrics(metricsData);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {

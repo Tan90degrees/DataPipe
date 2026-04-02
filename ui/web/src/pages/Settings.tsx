@@ -2,18 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Card, Form, Switch, Select, InputNumber, Button, message, Divider, Row, Col } from 'antd';
 import { systemApi } from '../api/system';
 
-interface SystemSettings {
-  theme: 'light' | 'dark';
-  language: string;
-  timezone: string;
-  notificationEnabled: boolean;
-  autoRefresh: boolean;
-  refreshInterval: number;
-}
-
 const Settings: React.FC = () => {
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -48,7 +39,7 @@ const Settings: React.FC = () => {
   return (
     <div>
       <Card title="系统设置">
-        <Form form={form} layout="vertical" loading={loading}>
+        <Form form={form} layout="vertical">
           <Divider orientation="left">外观</Divider>
           <Row gutter={16}>
             <Col span={12}>

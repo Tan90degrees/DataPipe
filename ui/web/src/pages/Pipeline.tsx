@@ -22,8 +22,8 @@ const PipelinePage: React.FC = () => {
   const loadPipelines = async () => {
     try {
       setLoading(true);
-      const response = await pipelineApi.list();
-      setPipelines(response.pipelines);
+      const data = await pipelineApi.list();
+      setPipelines(data.pipelines);
     } catch (error) {
       message.error('加载管道列表失败');
     } finally {
