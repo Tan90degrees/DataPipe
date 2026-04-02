@@ -351,8 +351,8 @@ jobs:
 
             ### Docker Images
             ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/master:${{ needs.prepare.outputs.release_version }}
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ needs.prepare.outputs.release_version }}
+            docker pull ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}/master:${{ needs.prepare.outputs.release_version }}
+            docker pull ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name_lower }}/worker:${{ needs.prepare.outputs.release_version }}
             ```
 
             ### Helm Chart
