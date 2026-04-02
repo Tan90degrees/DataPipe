@@ -151,12 +151,13 @@ jobs:
       - name: Create package
         run: |
           cd dist/${{ matrix.platform }}
+          PLATFORM_SLUG=$(echo "${{ matrix.platform }}" | tr '/' '-')
           case "${{ matrix.platform }}" in
             windows/amd64)
-              zip -r datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}.zip master worker cli
+              zip -r datapipe-${{ needs.prepare.outputs.release_version }}-${PLATFORM_SLUG}.zip master worker cli
               ;;
             *)
-              tar -czf datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}.tar.gz ./master ./worker ./cli
+              tar -czf datapipe-${{ needs.prepare.outputs.release_version }}-${PLATFORM_SLUG}.tar.gz ./master ./worker ./cli
               ;;
           esac
 
@@ -171,12 +172,13 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist/${{ matrix.platform }}
+          PLATFORM_SLUG=$(echo "${{ matrix.platform }}" | tr '/' '-')
           case "${{ matrix.platform }}" in
             windows/amd64)
-              sha256sum *.zip > SHA256SUMS
+              sha256sum datapipe-${{ needs.prepare.outputs.release_version }}-${PLATFORM_SLUG}.zip > SHA256SUMS
               ;;
             *)
-              sha256sum *.tar.gz > SHA256SUMS
+              sha256sum datapipe-${{ needs.prepare.outputs.release_version }}-${PLATFORM_SLUG}.tar.gz > SHA256SUMS
               ;;
           esac
           cat SHA256SUMS
@@ -361,7 +363,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for file in artifacts/**/*.zip artifacts/**/*.tar.gz artifacts/**/*.tgz; do
+          ls -la artifacts/
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" \) | while read file; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
               gh release upload ${{ needs.prepare.outputs.release_version }} "$file" --clobber
