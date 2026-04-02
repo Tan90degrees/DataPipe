@@ -149,9 +149,11 @@ jobs:
             ./cmd/cli
 
       - name: Create package
+        id: package
         run: |
           cd dist/${{ matrix.platform }}
           PLATFORM_SLUG=$(echo "${{ matrix.platform }}" | tr '/' '-')
+          echo "platform_slug=${PLATFORM_SLUG}" >> $GITHUB_OUTPUT
           case "${{ matrix.platform }}" in
             windows/amd64)
               zip -r datapipe-${{ needs.prepare.outputs.release_version }}-${PLATFORM_SLUG}.zip master worker cli
@@ -164,7 +166,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: datapipe-${{ replace(matrix.platform, '/', '-') }}-${{ github.run_id }}
+          name: datapipe-${{ steps.package.outputs.platform_slug }}-${{ github.run_id }}
           path: dist/${{ matrix.platform }}/*
           retention-days: 30
           if-no-files-found: error
@@ -186,7 +188,7 @@ jobs:
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
-          name: datapipe-checksums-${{ replace(matrix.platform, '/', '-') }}-${{ github.run_id }}
+          name: datapipe-checksums-${{ steps.package.outputs.platform_slug }}-${{ github.run_id }}
           path: dist/${{ matrix.platform }}/SHA256SUMS
           retention-days: 30
 
