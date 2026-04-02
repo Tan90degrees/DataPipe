@@ -1,0 +1,18 @@
+apiVersion: v2
+name: datapipe
+description: DataPipe - Distributed Data Processing System
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - datapipe
+  - data-processing
+  - pipeline
+  - distributed
+home: https://github.com/DataPipe/datapipe
+sources:
+  - https://github.com/DataPipe/datapipe
+maintainers:
+  - name: DataPipe Team
+    email: team@datapipe.io
+engine: gotpl

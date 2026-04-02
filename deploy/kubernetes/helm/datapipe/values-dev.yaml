@@ -1,0 +1,112 @@
+namespace: datapipe-dev
+
+replicaCount: 1
+
+imagePullSecrets: []
+registry: docker.io
+repository: datapipe
+
+master:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: datapipe-master
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 30080
+    metricsPort: 9090
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 85
+  pdb:
+    enabled: false
+    minAvailable: 1
+
+worker:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: datapipe-worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 85
+  daemonset:
+    enabled: false
+
+database:
+  enabled: true
+  host: postgresql
+  port: 5432
+  name: datapipe_dev
+  user: datapipe
+  password: devpassword
+  sslmode: disable
+  maxOpenConns: 10
+  maxIdleConns: 2
+  connMaxLifetime: 300
+
+redis:
+  enabled: true
+  host: redis
+  port: 6379
+  password: ""
+  db: 0
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: datapipe-dev.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: datapipe-dev-tls
+      hosts:
+        - datapipe-dev.local
+
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+  grafana:
+    enabled: false
+    port: 3000
+
+serviceMonitor:
+  enabled: false
+  interval: 60s
+
+config:
+  logLevel: debug
+  workerConcurrency: 5
+  maxRetryAttempts: 2
+  pipelineBufferSize: 50

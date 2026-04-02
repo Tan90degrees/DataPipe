@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+  master:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.master
+    image: datapipe-master:latest
+    container_name: datapipe-master
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      - LOG_LEVEL=info
+      - WORKER_CONCURRENCY=10
+      - MAX_RETRY_ATTEMPTS=3
+      - PIPELINE_BUFFER_SIZE=100
+      - DB_HOST=postgresql
+      - DB_PORT=5432
+      - DB_NAME=datapipe
+      - DB_USER=datapipe
+      - DB_PASSWORD=datapipe123
+      - DB_SSLMODE=disable
+      - DB_MAX_OPEN_CONNS=25
+      - DB_MAX_IDLE_CONNS=5
+      - DB_CONN_MAX_LIFETIME=300
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - PROMETHEUS_PORT=9090
+      - PROMETHEUS_PATH=/metrics
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.worker
+    image: datapipe-worker:latest
+    container_name: datapipe-worker
+    ports:
+      - "9091:9090"
+    environment:
+      - LOG_LEVEL=info
+      - WORKER_CONCURRENCY=10
+      - MAX_RETRY_ATTEMPTS=3
+      - PIPELINE_BUFFER_SIZE=100
+      - DB_HOST=postgresql
+      - DB_PORT=5432
+      - DB_NAME=datapipe
+      - DB_USER=datapipe
+      - DB_PASSWORD=datapipe123
+      - DB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - WORKER_ENABLED=true
+      - PROMETHEUS_PORT=9090
+      - PROMETHEUS_PATH=/metrics
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "ps", "aux"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  postgresql:
+    image: postgres:15-alpine
+    container_name: datapipe-postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=datapipe
+      - POSTGRES_USER=datapipe
+      - POSTGRES_PASSWORD=datapipe123
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datapipe -d datapipe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: datapipe-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: datapipe-prometheus
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: datapipe-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - datapipe-network
+    restart: unless-stopped
+
+networks:
+  datapipe-network:
+    driver: bridge
+
+volumes:
+  postgresql-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

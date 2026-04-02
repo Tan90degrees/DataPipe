@@ -1,0 +1,113 @@
+namespace: datapipe
+
+replicaCount: 1
+
+imagePullSecrets: []
+registry: docker.io
+repository: datapipe
+
+master:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: datapipe-master
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    metricsPort: 9090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+worker:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: datapipe-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  daemonset:
+    enabled: false
+
+database:
+  enabled: true
+  host: postgresql.datapipe.svc.cluster.local
+  port: 5432
+  name: datapipe
+  user: datapipe
+  password: changeme
+  sslmode: disable
+  maxOpenConns: 25
+  maxIdleConns: 5
+  connMaxLifetime: 300
+
+redis:
+  enabled: true
+  host: redis.datapipe.svc.cluster.local
+  port: 6379
+  password: ""
+  db: 0
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: datapipe.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: datapipe-tls
+      hosts:
+        - datapipe.local
+
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+  grafana:
+    enabled: true
+    port: 3000
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+
+config:
+  logLevel: info
+  workerConcurrency: 10
+  maxRetryAttempts: 3
+  pipelineBufferSize: 100

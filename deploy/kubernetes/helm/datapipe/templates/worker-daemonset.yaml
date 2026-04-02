@@ -1,0 +1,89 @@
+{{- if and .Values.worker.enabled .Values.worker.daemonset.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "datapipe.worker.fullname" . }}-daemon
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "datapipe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    app.kubernetes.io mode: daemonset
+spec:
+  selector:
+    matchLabels:
+      {{- include "datapipe.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+      app.kubernetes.io mode: daemonset
+  template:
+    metadata:
+      labels:
+        {{- include "datapipe.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+        app.kubernetes.io mode: daemonset
+      annotations:
+        {{- if .Values.monitoring.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: {{ .Values.monitoring.prometheus.path | quote }}
+        {{- end }}
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      serviceAccountName: {{ include "datapipe.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "datapipe.worker.image" . }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "datapipe.fullname" . }}-config
+            - secretRef:
+                name: {{ include "datapipe.fullname" . }}-secret
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "datapipe.fullname" . }}-secret
+                  key: DB_PASSWORD
+                  optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "datapipe.fullname" . }}-secret
+                  key: REDIS_PASSWORD
+                  optional: true
+            - name: WORKER_ENABLED
+              value: "true"
+            - name: WORKER_MODE
+              value: "daemon"
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 10 }}
+          volumeMounts:
+            - name: varrun
+              mountPath: /var/run
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: varrun
+          emptyDir: {}
+{{- end }}

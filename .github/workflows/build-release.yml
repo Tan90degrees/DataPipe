@@ -1,0 +1,420 @@
+name: Build and Release Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release Version (e.g., v1.0.0)'
+        required: false
+        type: string
+      build_type:
+        description: 'Build Type'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+          - all
+  push:
+    branches:
+      - main
+      - release/**
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+env:
+  GO_VERSION: '1.21'
+  NODE_VERSION: '18'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build_type: ${{ steps.vars.outputs.build_type }}
+      release_version: ${{ steps.vars.outputs.release_version }}
+      is_release: ${{ steps.vars.outputs.is_release }}
+      is_tag: ${{ steps.vars.outputs.is_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up build variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "build_type=${{ inputs.build_type }}" >> $GITHUB_OUTPUT
+            echo "release_version=${{ inputs.release_version }}" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+            echo "build_type=release" >> $GITHUB_OUTPUT
+            echo "release_version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "build_type=all" >> $GITHUB_OUTPUT
+            echo "release_version=latest" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          else
+            echo "build_type=debug" >> $GITHUB_OUTPUT
+            echo "release_version=debug" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Display build variables
+        run: |
+          echo "Build Type: ${{ steps.vars.outputs.build_type }}"
+          echo "Release Version: ${{ steps.vars.outputs.release_version }}"
+          echo "Is Release: ${{ steps.vars.outputs.is_release }}"
+          echo "Is Tag: ${{ steps.vars.outputs.is_tag }}"
+
+      - name: Determine build matrices
+        id: matrices
+        run: |
+          BUILD_TYPE=${{ steps.vars.outputs.build_type }}
+          
+          if [ "$BUILD_TYPE" = "all" ]; then
+            echo "platforms=[\"linux/amd64\", \"linux/arm64\", \"darwin/amd64\", \"darwin/arm64\", \"windows/amd64\"]" >> $GITHUB_OUTPUT
+          elif [ "$BUILD_TYPE" = "release" ]; then
+            echo "platforms=[\"linux/amd64\", \"linux/arm64\", \"darwin/amd64\", \"darwin/arm64\", \"windows/amd64\"]" >> $GITHUB_OUTPUT
+          elif [ "$BUILD_TYPE" = "debug" ]; then
+            echo "platforms=[\"linux/amd64\", \"linux/arm64\"]" >> $GITHUB_OUTPUT
+          else
+            echo "platforms=[\"linux/amd64\"]" >> $GITHUB_OUTPUT
+          fi
+
+  build-go:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.prepare.outputs.platforms) }}
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Get dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build Master service
+        env:
+          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
+          GOARCH: ${{ split(matrix.platform, '/')[1] }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist/${{ matrix.platform }}/master
+          go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/master/datapipe-master \
+            ./cmd/master
+
+      - name: Build Worker service
+        env:
+          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
+          GOARCH: ${{ split(matrix.platform, '/')[1] }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist/${{ matrix.platform }}/worker
+          go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/worker/datapipe-worker \
+            ./cmd/worker
+
+      - name: Build CLI tool
+        env:
+          GOOS: ${{ matrix.platform == 'windows/amd64' && 'windows' || split(matrix.platform, '/')[0] }}
+          GOARCH: ${{ split(matrix.platform, '/')[1] }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist/${{ matrix.platform }}/cli
+          EXTENSION=${{ matrix.platform == 'windows/amd64' && '.exe' || '' }}
+          go build -ldflags="-s -w" -o dist/${{ matrix.platform }}/cli/datapipe-cli${EXTENSION} \
+            ./cmd/cli
+
+      - name: Create package
+        run: |
+          PACKAGE_NAME="datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}"
+          cd dist/${{ matrix.platform }}
+          
+          case "${{ matrix.platform }}" in
+            windows/amd64)
+              zip -r "${PACKAGE_NAME}.zip" master worker cli
+              ;;
+            *)
+              tar -czf "${PACKAGE_NAME}.tar.gz" master worker cli
+              ;;
+          esac
+          
+          echo "package_name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapipe-${{ matrix.platform }}-${{ github.run_id }}
+          path: dist/${{ matrix.platform }}/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate checksums
+        run: |
+          cd dist/${{ matrix.platform }}
+          case "${{ matrix.platform }}" in
+            windows/amd64)
+              sha256sum *.zip > SHA256SUMS
+              ;;
+            *)
+              sha256sum *.tar.gz > SHA256SUMS
+              ;;
+          esac
+          cat SHA256SUMS
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapipe-checksums-${{ matrix.platform }}-${{ github.run_id }}
+          path: dist/${{ matrix.platform }}/SHA256SUMS
+          retention-days: 30
+
+  build-ui:
+    needs: prepare
+    runs-on: ubuntu-latest
+    if: ${{ needs.prepare.outputs.is_release == 'true' || needs.prepare.outputs.build_type == 'all' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ui/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./ui/web
+        run: npm ci
+
+      - name: Build UI
+        working-directory: ./ui/web
+        run: npm run build
+
+      - name: Package UI
+        run: |
+          mkdir -p dist/ui
+          cd ui/web
+          tar -czf ../../dist/ui/datapipe-ui.tar.gz dist
+
+      - name: Upload UI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapipe-ui-${{ github.run_id }}
+          path: dist/ui/*
+          retention-days: 30
+
+  build-docker:
+    needs: prepare
+    runs-on: ubuntu-latest
+    if: ${{ needs.prepare.outputs.is_release == 'true' }}
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Master image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.master
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/master:${{ needs.prepare.outputs.release_version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.worker
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ needs.prepare.outputs.release_version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  package-helm:
+    needs: prepare
+    runs-on: ubuntu-latest
+    if: ${{ needs.prepare.outputs.is_release == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Package Helm chart
+        run: |
+          helm package deploy/kubernetes/helm/datapipe \
+            --version ${{ needs.prepare.outputs.release_version }} \
+            --app-version ${{ needs.prepare.outputs.release_version }}
+
+      - name: Upload Helm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapipe-helm-${{ github.run_id }}
+          path: datapipe-*.tgz
+          retention-days: 30
+
+  create-release:
+    needs: [prepare, build-go, build-ui, package-helm]
+    runs-on: ubuntu-latest
+    if: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.is_tag == 'true' }}
+    permissions:
+      contents: write
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_version }}
+          release_name: DataPipe ${{ needs.prepare.outputs.release_version }}
+          draft: false
+          prerelease: ${{ contains(needs.prepare.outputs.release_version, 'alpha') || contains(needs.prepare.outputs.release_version, 'beta') || contains(needs.prepare.outputs.release_version, 'rc') }}
+          body: |
+            ## DataPipe ${{ needs.prepare.outputs.release_version }}
+
+            ### Downloads
+            - Linux amd64/arm64
+            - macOS amd64/arm64
+            - Windows amd64
+
+            ### Docker Images
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/master:${{ needs.prepare.outputs.release_version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ needs.prepare.outputs.release_version }}
+            ```
+
+            ### Helm Chart
+            ```bash
+            helm install datapipe datapipe-${{ needs.prepare.outputs.release_version }}.tgz
+            ```
+
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for file in artifacts/**/*.zip artifacts/**/*.tar.gz artifacts/**/*.tgz; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file..."
+              gh release upload ${{ needs.prepare.outputs.release_version }} "$file" --clobber
+            fi
+          done
+
+  notify:
+    needs: [prepare, build-go, build-ui, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Send notification
+        if: ${{ needs.create-release.result == 'success' }}
+        run: |
+          echo "::notice title=Build Complete::DataPipe ${{ needs.prepare.outputs.release_version }} build completed successfully!"
+
+      - name: Send failure notification
+        if: ${{ needs.create-release.result == 'failure' }}
+        run: |
+          echo "::error title=Build Failed::DataPipe build failed. Please check the logs for details."
+
+      - name: Discord notification
+        if: ${{ secrets.DISCORD_WEBHOOK != '' && (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        uses: sarisia/actions-token-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: ${{ job.status }}
+          title: "DataPipe Build ${{ job.status }}"
+          description: "Version: ${{ needs.prepare.outputs.release_version }}"
+          color: ${{ job.status == 'success' && '0x00FF00' || '0xFF0000' }}
+
+  summary:
+    needs: [prepare, build-go]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Build Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: ${{ needs.prepare.outputs.release_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build Type: ${{ needs.prepare.outputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Platforms Built" >> $GITHUB_STEP_SUMMARY
+          for platform in ${{ fromJson(needs.prepare.outputs.platforms) }}; do
+            echo "- \`${{ platform }}\`" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| build-go | ${{ needs.build-go.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| build-ui | ${{ needs.build-ui.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| create-release | ${{ needs.create-release.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,30 @@
+{{- if .Values.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "datapipe.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "datapipe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: configmap
+data:
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  WORKER_CONCURRENCY: {{ .Values.config.workerConcurrency | quote }}
+  MAX_RETRY_ATTEMPTS: {{ .Values.config.maxRetryAttempts | quote }}
+  PIPELINE_BUFFER_SIZE: {{ .Values.config.pipelineBufferSize | quote }}
+  DB_HOST: {{ .Values.database.host | quote }}
+  DB_PORT: {{ .Values.database.port | quote }}
+  DB_NAME: {{ .Values.database.name | quote }}
+  DB_USER: {{ .Values.database.user | quote }}
+  DB_SSLMODE: {{ .Values.database.sslmode | quote }}
+  DB_MAX_OPEN_CONNS: {{ .Values.database.maxOpenConns | quote }}
+  DB_MAX_IDLE_CONNS: {{ .Values.database.maxIdleConns | quote }}
+  DB_CONN_MAX_LIFETIME: {{ .Values.database.connMaxLifetime | quote }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  REDIS_DB: {{ .Values.redis.db | quote }}
+{{- if .Values.monitoring.enabled }}
+  PROMETHEUS_PORT: {{ .Values.monitoring.prometheus.port | quote }}
+  PROMETHEUS_PATH: {{ .Values.monitoring.prometheus.path | quote }}
+{{- end }}
+{{- end }}
