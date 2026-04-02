@@ -27,7 +27,7 @@ on:
       - main
 
 env:
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.23'
   NODE_VERSION: '18'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
