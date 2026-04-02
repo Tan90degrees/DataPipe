@@ -385,24 +385,6 @@ jobs:
         run: |
           echo "::error title=Build Failed::DataPipe build failed. Please check the logs for details."
 
-      - name: Discord notification
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.create-release.result == 'success' }}
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
-          if [ -z "$DISCORD_WEBHOOK" ]; then
-            echo "Discord webhook not configured, skipping notification"
-            exit 0
-          fi
-          echo "::notice title=Discord::Sending Discord notification..."
-        uses: sarisia/actions-token-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          status: ${{ job.status }}
-          title: "DataPipe Build ${{ job.status }}"
-          description: "Version: ${{ needs.prepare.outputs.release_version }}"
-          color: ${{ job.status == 'success' && '0x00FF00' || '0xFF0000' }}
-
   summary:
     needs: [prepare, build-go]
     runs-on: ubuntu-latest
