@@ -164,7 +164,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: datapipe-${{ matrix.platform }}-${{ github.run_id }}
+          name: datapipe-${{ replace(matrix.platform, '/', '-') }}-${{ github.run_id }}
           path: dist/${{ matrix.platform }}/*
           retention-days: 30
           if-no-files-found: error
@@ -186,7 +186,7 @@ jobs:
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
-          name: datapipe-checksums-${{ matrix.platform }}-${{ github.run_id }}
+          name: datapipe-checksums-${{ replace(matrix.platform, '/', '-') }}-${{ github.run_id }}
           path: dist/${{ matrix.platform }}/SHA256SUMS
           retention-days: 30
 
