@@ -152,16 +152,16 @@ jobs:
         run: |
           PACKAGE_NAME="datapipe-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}"
           cd dist/${{ matrix.platform }}
-          
+
           case "${{ matrix.platform }}" in
             windows/amd64)
               zip -r "${PACKAGE_NAME}.zip" master worker cli
               ;;
             *)
-              tar -czf "${PACKAGE_NAME}.tar.gz" master worker cli
+              tar -czf "${PACKAGE_NAME}.tar.gz" ./master ./worker ./cli
               ;;
           esac
-          
+
           echo "package_name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
@@ -209,7 +209,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./ui/web
-        run: npm ci
+        run: npm install
 
       - name: Build UI
         working-directory: ./ui/web
