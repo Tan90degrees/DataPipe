@@ -370,7 +370,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la artifacts/
-          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" \) | while read file; do
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "SHA256SUMS" \) | while read file; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
               gh release upload ${{ needs.prepare.outputs.release_version }} "$file" --clobber
