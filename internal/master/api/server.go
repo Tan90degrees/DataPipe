@@ -63,6 +63,11 @@ func NewServer(db *gorm.DB, cfg *config.Config) *Server {
 }
 
 func (s *Server) setupRoutes() {
+	uiPath := os.Getenv("UI_PATH")
+	if uiPath == "" {
+		uiPath = "./ui"
+	}
+
 	v1 := s.engine.Group("/api/v1")
 	{
 		system := v1.Group("/system")
@@ -104,6 +109,12 @@ func (s *Server) setupRoutes() {
 			executions.GET("/:id/metrics", s.executionHandler.Metrics)
 		}
 	}
+
+	s.engine.Static("/static", uiPath+"/static")
+	s.engine.StaticFile("/", uiPath+"/index.html")
+	s.engine.NoRoute(func(c *gin.Context) {
+		c.File(uiPath + "/index.html")
+	})
 }
 
 func (s *Server) Start() error {

@@ -320,9 +320,9 @@ jobs:
           retention-days: 30
 
   create-release:
-    needs: [prepare, build-go, build-ui, package-helm]
+    needs: [prepare, build-go, build-ui, build-docker, package-helm]
     runs-on: ubuntu-latest
-    if: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.is_tag == 'true' }}
+    if: ${{ needs.prepare.outputs.is_release == 'true' }}
     permissions:
       contents: write
     outputs:
