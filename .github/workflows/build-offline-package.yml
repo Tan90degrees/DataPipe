@@ -1,0 +1,783 @@
+name: Build Offline Deployment Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release Version (e.g., v1.0.0)'
+        required: true
+        type: string
+      platform:
+        description: 'Target Platform'
+        required: false
+        default: 'linux/amd64'
+        type: choice
+        options:
+          - linux/amd64
+          - linux/arm64
+      include_monitoring:
+        description: 'Include Monitoring Stack (Prometheus + Grafana)'
+        required: false
+        default: true
+        type: boolean
+      worker_replicas:
+        description: 'Number of Worker Replicas'
+        required: false
+        default: 2
+        type: number
+  push:
+    tags:
+      - 'v*-offline'
+
+env:
+  GO_VERSION: '1.23'
+  NODE_VERSION: '18'
+  POSTGRES_IMAGE: postgres:15-alpine
+  REDIS_IMAGE: redis:7-alpine
+  PROMETHEUS_IMAGE: prom/prometheus:v2.48.0
+  GRAFANA_IMAGE: grafana/grafana:10.2.2
+
+jobs:
+  build-offline-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ui/web/package.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Python and install dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Python YAML module
+        run: pip install PyYAML
+
+      - name: Determine build variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.release_version }}"
+            PLATFORM="${{ inputs.platform }}"
+            INCLUDE_MONITORING="${{ inputs.include_monitoring }}"
+            WORKER_REPLICAS="${{ inputs.worker_replicas }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            VERSION="${VERSION%-offline}"
+            PLATFORM="linux/amd64"
+            INCLUDE_MONITORING="true"
+            WORKER_REPLICAS="2"
+          fi
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "platform=${PLATFORM}" >> $GITHUB_OUTPUT
+          echo "include_monitoring=${INCLUDE_MONITORING}" >> $GITHUB_OUTPUT
+          echo "worker_replicas=${WORKER_REPLICAS}" >> $GITHUB_OUTPUT
+
+          IFS='/' read -r GOOS GOARCH <<< "$PLATFORM"
+          echo "goos=${GOOS}" >> $GITHUB_OUTPUT
+          echo "goarch=${GOARCH}" >> $GITHUB_OUTPUT
+
+      - name: Build Master binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ steps.vars.outputs.goos }}
+          GOARCH: ${{ steps.vars.outputs.goarch }}
+        run: |
+          go build -ldflags="-s -w" -o offline-staging/datapipe-master ./cmd/master
+
+      - name: Build Worker binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ steps.vars.outputs.goos }}
+          GOARCH: ${{ steps.vars.outputs.goarch }}
+        run: |
+          go build -ldflags="-s -w" -o offline-staging/datapipe-worker ./cmd/worker
+
+      - name: Build CLI binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ steps.vars.outputs.goos }}
+          GOARCH: ${{ steps.vars.outputs.goarch }}
+        run: |
+          go build -ldflags="-s -w" -o offline-staging/datapipe-cli ./cmd/cli
+
+      - name: Build UI
+        working-directory: ./ui/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Prepare UI assets
+        run: |
+          mkdir -p offline-staging/ui
+          cp -r ui/web/dist/* offline-staging/ui/
+
+      - name: Build Docker images
+        run: |
+          docker build -f deploy/docker/Dockerfile.master -t datapipe-master:${{ steps.vars.outputs.version }} .
+          docker build -f deploy/docker/Dockerfile.worker -t datapipe-worker:${{ steps.vars.outputs.version }} .
+
+      - name: Save application Docker images
+        run: |
+          mkdir -p offline-staging/images
+          docker save datapipe-master:${{ steps.vars.outputs.version }} | gzip > offline-staging/images/datapipe-master.tar.gz
+          docker save datapipe-worker:${{ steps.vars.outputs.version }} | gzip > offline-staging/images/datapipe-worker.tar.gz
+
+      - name: Pull and save dependency images
+        run: |
+          mkdir -p offline-staging/images
+
+          docker pull --platform ${{ steps.vars.outputs.platform }} ${{ env.POSTGRES_IMAGE }}
+          docker save ${{ env.POSTGRES_IMAGE }} | gzip > offline-staging/images/postgres.tar.gz
+
+          docker pull --platform ${{ steps.vars.outputs.platform }} ${{ env.REDIS_IMAGE }}
+          docker save ${{ env.REDIS_IMAGE }} | gzip > offline-staging/images/redis.tar.gz
+
+      - name: Pull and save monitoring images
+        if: ${{ steps.vars.outputs.include_monitoring == 'true' }}
+        run: |
+          docker pull --platform ${{ steps.vars.outputs.platform }} ${{ env.PROMETHEUS_IMAGE }}
+          docker save ${{ env.PROMETHEUS_IMAGE }} | gzip > offline-staging/images/prometheus.tar.gz
+
+          docker pull --platform ${{ steps.vars.outputs.platform }} ${{ env.GRAFANA_IMAGE }}
+          docker save ${{ env.GRAFANA_IMAGE }} | gzip > offline-staging/images/grafana.tar.gz
+
+      - name: Prepare deployment configs
+        run: |
+          mkdir -p offline-staging/configs/grafana/provisioning/dashboards
+          mkdir -p offline-staging/configs/grafana/provisioning/datasources
+
+          cp deploy/docker/prometheus.yml offline-staging/configs/
+          cp deploy/docker/grafana/provisioning/dashboards/dashboards.yaml offline-staging/configs/grafana/provisioning/dashboards/
+          cp deploy/docker/grafana/provisioning/datasources/datasources.yaml offline-staging/configs/grafana/provisioning/datasources/
+
+      - name: Generate image manifest
+        run: |
+          GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          python3 -c "
+          import json
+          manifest = {
+              'version': '${{ steps.vars.outputs.version }}',
+              'platform': '${{ steps.vars.outputs.platform }}',
+              'generated_at': '${GENERATED_AT}',
+              'images': {
+                  'datapipe-master': {
+                      'tag': '${{ steps.vars.outputs.version }}',
+                      'file': 'datapipe-master.tar.gz'
+                  },
+                  'datapipe-worker': {
+                      'tag': '${{ steps.vars.outputs.version }}',
+                      'file': 'datapipe-worker.tar.gz'
+                  },
+                  'postgres': {
+                      'tag': '${{ env.POSTGRES_IMAGE }}',
+                      'file': 'postgres.tar.gz'
+                  },
+                  'redis': {
+                      'tag': '${{ env.REDIS_IMAGE }}',
+                      'file': 'redis.tar.gz'
+                  }
+              },
+              'include_monitoring': ${{ steps.vars.outputs.include_monitoring == 'true' && 'True' || 'False' }}
+          }
+          if ${{ steps.vars.outputs.include_monitoring == 'true' }}:
+              manifest['images']['prometheus'] = {
+                  'tag': '${{ env.PROMETHEUS_IMAGE }}',
+                  'file': 'prometheus.tar.gz'
+              }
+              manifest['images']['grafana'] = {
+                  'tag': '${{ env.GRAFANA_IMAGE }}',
+                  'file': 'grafana.tar.gz'
+              }
+          with open('offline-staging/images/manifest.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+          "
+          cat offline-staging/images/manifest.json
+
+      - name: Generate docker-compose for offline
+        run: |
+          python3 -c "
+          import yaml, json
+
+          version = '${{ steps.vars.outputs.version }}'
+          worker_replicas = int('${{ steps.vars.outputs.worker_replicas }}')
+          include_monitoring = ${{ steps.vars.outputs.include_monitoring == 'true' and 'True' or 'False' }}
+
+          compose = {
+              'version': '3.8',
+              'services': {
+                  'master': {
+                      'image': f'datapipe-master:{version}',
+                      'container_name': 'datapipe-master',
+                      'ports': ['\${MASTER_PORT:-8080}:8080', '\${MASTER_METRICS_PORT:-9090}:9090'],
+                      'environment': [
+                          'UI_PATH=/app/ui',
+                          'LOG_LEVEL=\${LOG_LEVEL:-info}',
+                          'DB_HOST=postgresql',
+                          'DB_PORT=5432',
+                          'DB_NAME=\${DB_NAME:-datapipe}',
+                          'DB_USER=\${DB_USER:-datapipe}',
+                          'DB_PASSWORD=\${DB_PASSWORD:-datapipe123}',
+                          'DB_SSLMODE=disable',
+                          'REDIS_HOST=redis',
+                          'REDIS_PORT=6379',
+                          'REDIS_DB=0',
+                      ],
+                      'depends_on': {
+                          'postgresql': {'condition': 'service_healthy'},
+                          'redis': {'condition': 'service_healthy'},
+                      },
+                      'healthcheck': {
+                          'test': ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8080/health'],
+                          'interval': '30s',
+                          'timeout': '5s',
+                          'retries': 3,
+                          'start_period': '10s',
+                      },
+                      'networks': ['datapipe-network'],
+                      'restart': 'unless-stopped',
+                  },
+                  'worker': {
+                      'image': f'datapipe-worker:{version}',
+                      'container_name': 'datapipe-worker',
+                      'ports': ['\${WORKER_METRICS_PORT:-9091}:9090'],
+                      'environment': [
+                          'LOG_LEVEL=\${LOG_LEVEL:-info}',
+                          'DB_HOST=postgresql',
+                          'DB_PORT=5432',
+                          'DB_NAME=\${DB_NAME:-datapipe}',
+                          'DB_USER=\${DB_USER:-datapipe}',
+                          'DB_PASSWORD=\${DB_PASSWORD:-datapipe123}',
+                          'DB_SSLMODE=disable',
+                          'REDIS_HOST=redis',
+                          'REDIS_PORT=6379',
+                          'REDIS_DB=0',
+                      ],
+                      'depends_on': {
+                          'postgresql': {'condition': 'service_healthy'},
+                          'redis': {'condition': 'service_healthy'},
+                      },
+                      'healthcheck': {
+                          'test': ['CMD', 'ps', 'aux'],
+                          'interval': '30s',
+                          'timeout': '5s',
+                          'retries': 3,
+                          'start_period': '10s',
+                      },
+                      'networks': ['datapipe-network'],
+                      'restart': 'unless-stopped',
+                      'deploy': {'replicas': worker_replicas},
+                  },
+                  'postgresql': {
+                      'image': 'postgres:15-alpine',
+                      'container_name': 'datapipe-postgresql',
+                      'ports': ['\${DB_EXTERNAL_PORT:-5432}:5432'],
+                      'environment': [
+                          'POSTGRES_DB=\${DB_NAME:-datapipe}',
+                          'POSTGRES_USER=\${DB_USER:-datapipe}',
+                          'POSTGRES_PASSWORD=\${DB_PASSWORD:-datapipe123}',
+                      ],
+                      'volumes': ['postgresql-data:/var/lib/postgresql/data'],
+                      'healthcheck': {
+                          'test': ['CMD-SHELL', 'pg_isready -U \${DB_USER:-datapipe} -d \${DB_NAME:-datapipe}'],
+                          'interval': '10s',
+                          'timeout': '5s',
+                          'retries': 5,
+                          'start_period': '10s',
+                      },
+                      'networks': ['datapipe-network'],
+                      'restart': 'unless-stopped',
+                  },
+                  'redis': {
+                      'image': 'redis:7-alpine',
+                      'container_name': 'datapipe-redis',
+                      'ports': ['\${REDIS_EXTERNAL_PORT:-6379}:6379'],
+                      'command': 'redis-server --appendonly yes',
+                      'volumes': ['redis-data:/data'],
+                      'healthcheck': {
+                          'test': ['CMD', 'redis-cli', 'ping'],
+                          'interval': '10s',
+                          'timeout': '5s',
+                          'retries': 5,
+                          'start_period': '5s',
+                      },
+                      'networks': ['datapipe-network'],
+                      'restart': 'unless-stopped',
+                  },
+              },
+              'networks': {
+                  'datapipe-network': {'driver': 'bridge'},
+              },
+              'volumes': {
+                  'postgresql-data': None,
+                  'redis-data': None,
+              },
+          }
+
+          if include_monitoring:
+              compose['services']['prometheus'] = {
+                  'image': 'prom/prometheus:v2.48.0',
+                  'container_name': 'datapipe-prometheus',
+                  'ports': ['\${PROMETHEUS_PORT:-9092}:9090'],
+                  'volumes': [
+                      './configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro',
+                      'prometheus-data:/prometheus',
+                  ],
+                  'command': [
+                      '--config.file=/etc/prometheus/prometheus.yml',
+                      '--storage.tsdb.path=/prometheus',
+                      '--web.enable-lifecycle',
+                  ],
+                  'networks': ['datapipe-network'],
+                  'restart': 'unless-stopped',
+              }
+              compose['services']['grafana'] = {
+                  'image': 'grafana/grafana:10.2.2',
+                  'container_name': 'datapipe-grafana',
+                  'ports': ['\${GRAFANA_PORT:-3000}:3000'],
+                  'environment': [
+                      'GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER:-admin}',
+                      'GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_ADMIN_PASSWORD:-admin123}',
+                      'GF_USERS_ALLOW_SIGN_UP=false',
+                  ],
+                  'volumes': [
+                      'grafana-data:/var/lib/grafana',
+                      './configs/grafana/provisioning:/etc/grafana/provisioning:ro',
+                  ],
+                  'depends_on': ['prometheus'],
+                  'networks': ['datapipe-network'],
+                  'restart': 'unless-stopped',
+              }
+              compose['volumes']['prometheus-data'] = None
+              compose['volumes']['grafana-data'] = None
+
+          with open('offline-staging/docker-compose.yaml', 'w') as f:
+              yaml.dump(compose, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+          "
+          cat offline-staging/docker-compose.yaml
+
+      - name: Generate .env.example
+        run: |
+          cat > offline-staging/.env.example << 'ENV_EOF'
+          # DataPipe Offline Deployment Configuration
+          # Copy this file to .env and modify as needed
+
+          # Application
+          LOG_LEVEL=info
+
+          # Master
+          MASTER_PORT=8080
+          MASTER_METRICS_PORT=9090
+
+          # Worker
+          WORKER_METRICS_PORT=9091
+
+          # Database
+          DB_NAME=datapipe
+          DB_USER=datapipe
+          DB_PASSWORD=datapipe123
+          DB_EXTERNAL_PORT=5432
+
+          # Redis
+          REDIS_EXTERNAL_PORT=6379
+
+          # Monitoring (if included)
+          PROMETHEUS_PORT=9092
+          GRAFANA_PORT=3000
+          GRAFANA_ADMIN_USER=admin
+          GRAFANA_ADMIN_PASSWORD=admin123
+          ENV_EOF
+
+      - name: Generate deployment scripts
+        run: |
+          cat > offline-staging/load-images.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          IMAGE_DIR="${SCRIPT_DIR}/images"
+
+          if [ ! -d "$IMAGE_DIR" ]; then
+              echo "Error: Image directory not found at $IMAGE_DIR"
+              exit 1
+          fi
+
+          echo "========================================="
+          echo " DataPipe - Loading Docker Images"
+          echo "========================================="
+          echo ""
+
+          TOTAL=$(find "$IMAGE_DIR" -name "*.tar.gz" | wc -l)
+          CURRENT=0
+
+          for image_file in "$IMAGE_DIR"/*.tar.gz; do
+              if [ -f "$image_file" ]; then
+                  CURRENT=$((CURRENT + 1))
+                  filename=$(basename "$image_file")
+                  echo "[$CURRENT/$TOTAL] Loading $filename..."
+                  docker load < "$image_file"
+                  if [ $? -eq 0 ]; then
+                      echo "  ✓ Successfully loaded $filename"
+                  else
+                      echo "  ✗ Failed to load $filename"
+                      exit 1
+                  fi
+              fi
+          done
+
+          echo ""
+          echo "========================================="
+          echo " All images loaded successfully!"
+          echo "========================================="
+          echo ""
+          echo "Loaded images:"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | head -1
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "datapipe|postgres|redis|prometheus|grafana" || true
+          SCRIPT_EOF
+          chmod +x offline-staging/load-images.sh
+
+          cat > offline-staging/deploy.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "========================================="
+          echo " DataPipe - Offline Deployment"
+          echo "========================================="
+          echo ""
+
+          if ! command -v docker &> /dev/null; then
+              echo "Error: Docker is not installed or not in PATH"
+              exit 1
+          fi
+
+          if ! docker info &> /dev/null; then
+              echo "Error: Docker daemon is not running"
+              exit 1
+          fi
+
+          if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+              echo "Error: docker-compose is not installed"
+              exit 1
+          fi
+
+          COMPOSE_CMD="docker-compose"
+          if ! command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker compose"
+          fi
+
+          if [ ! -f .env ]; then
+              echo "No .env file found, creating from .env.example..."
+              cp .env.example .env
+              echo "Created .env with default values."
+              echo "Please review and modify .env before continuing."
+              echo ""
+              read -p "Continue with default configuration? (y/N): " confirm
+              if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                  echo "Deployment cancelled. Please edit .env and run this script again."
+                  exit 0
+              fi
+          fi
+
+          echo "Step 1: Loading Docker images..."
+          bash load-images.sh
+
+          echo ""
+          echo "Step 2: Starting services..."
+          $COMPOSE_CMD up -d
+
+          echo ""
+          echo "Step 3: Waiting for services to be healthy..."
+          MAX_WAIT=120
+          WAITED=0
+          INTERVAL=5
+
+          while [ $WAITED -lt $MAX_WAIT ]; do
+              MASTER_HEALTHY=$($COMPOSE_CMD ps master 2>/dev/null | grep -c "healthy" || echo "0")
+              DB_HEALTHY=$($COMPOSE_CMD ps postgresql 2>/dev/null | grep -c "healthy" || echo "0")
+              REDIS_HEALTHY=$($COMPOSE_CMD ps redis 2>/dev/null | grep -c "healthy" || echo "0")
+
+              if [ "$MASTER_HEALTHY" -ge 1 ] && [ "$DB_HEALTHY" -ge 1 ] && [ "$REDIS_HEALTHY" -ge 1 ]; then
+                  echo ""
+                  echo "========================================="
+                  echo " Deployment Successful!"
+                  echo "========================================="
+                  echo ""
+                  echo "Services:"
+                  echo "  Master API:    http://localhost:${MASTER_PORT:-8080}"
+                  echo "  Master Metrics:http://localhost:${MASTER_METRICS_PORT:-9090}"
+                  echo "  PostgreSQL:    localhost:${DB_EXTERNAL_PORT:-5432}"
+                  echo "  Redis:         localhost:${REDIS_EXTERNAL_PORT:-6379}"
+                  if grep -q "prometheus" docker-compose.yaml 2>/dev/null; then
+                      echo "  Prometheus:    http://localhost:${PROMETHEUS_PORT:-9092}"
+                      echo "  Grafana:       http://localhost:${GRAFANA_PORT:-3000}"
+                  fi
+                  echo ""
+                  echo "Useful commands:"
+                  echo "  View logs:     $COMPOSE_CMD logs -f"
+                  echo "  Stop:          bash stop.sh"
+                  echo "  Restart:       bash restart.sh"
+                  echo ""
+                  exit 0
+              fi
+
+              echo "  Waiting... (Master: $MASTER_HEALTHY, DB: $DB_HEALTHY, Redis: $REDIS_HEALTHY)"
+              sleep $INTERVAL
+              WAITED=$((WAITED + INTERVAL))
+          done
+
+          echo ""
+          echo "Warning: Services did not become healthy within ${MAX_WAIT}s"
+          echo "Check logs with: $COMPOSE_CMD logs"
+          exit 1
+          SCRIPT_EOF
+          chmod +x offline-staging/deploy.sh
+
+          cat > offline-staging/stop.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          COMPOSE_CMD="docker-compose"
+          if ! command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker compose"
+          fi
+
+          echo "Stopping DataPipe services..."
+          $COMPOSE_CMD down
+
+          echo "DataPipe services stopped."
+          SCRIPT_EOF
+          chmod +x offline-staging/stop.sh
+
+          cat > offline-staging/restart.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          COMPOSE_CMD="docker-compose"
+          if ! command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker compose"
+          fi
+
+          echo "Restarting DataPipe services..."
+          $COMPOSE_CMD restart
+
+          echo "DataPipe services restarted."
+          SCRIPT_EOF
+          chmod +x offline-staging/restart.sh
+
+          cat > offline-staging/logs.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          COMPOSE_CMD="docker-compose"
+          if ! command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker compose"
+          fi
+
+          SERVICE="${1:-}"
+          FOLLOW="${2:--f}"
+
+          if [ -n "$SERVICE" ]; then
+              $COMPOSE_CMD logs $FOLLOW "$SERVICE"
+          else
+              $COMPOSE_CMD logs $FOLLOW
+          fi
+          SCRIPT_EOF
+          chmod +x offline-staging/logs.sh
+
+      - name: Generate README
+        run: |
+          cat > offline-staging/README.md << 'README_EOF'
+          # DataPipe Offline Deployment Package
+
+          ## Prerequisites
+
+          - Docker (>= 20.10)
+          - Docker Compose (>= 2.0) or docker-compose (>= 1.29)
+          - Minimum 2GB RAM
+          - Minimum 10GB disk space
+
+          ## Quick Start
+
+          ```bash
+          # 1. Extract the package
+          tar -xzf datapipe-offline-VERSION-amd64.tar.gz
+          cd datapipe-offline-VERSION-amd64
+
+          # 2. Run the deployment script
+          bash deploy.sh
+          ```
+
+          ## Manual Deployment
+
+          ```bash
+          # 1. Load Docker images
+          bash load-images.sh
+
+          # 2. Configure environment (optional)
+          cp .env.example .env
+          # Edit .env as needed
+
+          # 3. Start services
+          docker-compose up -d
+          ```
+
+          ## Configuration
+
+          Edit `.env` file to customize:
+
+          | Variable | Default | Description |
+          |----------|---------|-------------|
+          | MASTER_PORT | 8080 | Master API port |
+          | DB_PASSWORD | datapipe123 | Database password |
+          | GRAFANA_ADMIN_PASSWORD | admin123 | Grafana admin password |
+
+          ## Service Endpoints
+
+          - **Master API**: http://localhost:8080
+          - **Grafana** (if included): http://localhost:3000
+          - **Prometheus** (if included): http://localhost:9092
+
+          ## Management Commands
+
+          ```bash
+          bash stop.sh      # Stop all services
+          bash restart.sh   # Restart all services
+          bash logs.sh      # View all logs
+          bash logs.sh master  # View master logs
+          ```
+
+          ## Verify Integrity
+
+          ```bash
+          sha256sum -c SHA256SUMS
+          ```
+          README_EOF
+
+          sed -i "s/VERSION/${{ steps.vars.outputs.version }}/g" offline-staging/README.md
+
+      - name: Generate checksums for all files
+        run: |
+          cd offline-staging
+          find . -type f ! -name "SHA256SUMS" -exec sha256sum {} \; > SHA256SUMS
+          echo "Checksums generated:"
+          cat SHA256SUMS
+
+      - name: Create offline package
+        id: package
+        run: |
+          PLATFORM_SLUG=$(echo "${{ steps.vars.outputs.platform }}" | tr '/' '-')
+          PACKAGE_NAME="datapipe-offline-${{ steps.vars.outputs.version }}-${PLATFORM_SLUG}"
+          echo "package_name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+
+          mv offline-staging "${PACKAGE_NAME}"
+          tar -czf "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}"
+
+          echo "Package created: ${PACKAGE_NAME}.tar.gz"
+          ls -lh "${PACKAGE_NAME}.tar.gz"
+
+      - name: Generate package checksum
+        run: |
+          sha256sum "${{ steps.package.outputs.package_name }}.tar.gz" > "${{ steps.package.outputs.package_name }}.tar.gz.sha256"
+          cat "${{ steps.package.outputs.package_name }}.tar.gz.sha256"
+
+      - name: Upload offline package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.package_name }}
+          path: |
+            ${{ steps.package.outputs.package_name }}.tar.gz
+            ${{ steps.package.outputs.package_name }}.tar.gz.sha256
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: "DataPipe Offline ${{ steps.vars.outputs.version }}"
+          draft: false
+          prerelease: ${{ contains(steps.vars.outputs.version, 'alpha') || contains(steps.vars.outputs.version, 'beta') || contains(steps.vars.outputs.version, 'rc') }}
+          body: |
+            ## DataPipe Offline Deployment Package ${{ steps.vars.outputs.version }}
+
+            ### Package Contents
+            - DataPipe Master & Worker Docker images
+            - PostgreSQL 15 (Alpine)
+            - Redis 7 (Alpine)
+            - Prometheus v2.48.0 (if included)
+            - Grafana 10.2.2 (if included)
+            - Deployment scripts & configuration files
+
+            ### Quick Start
+            ```bash
+            tar -xzf datapipe-offline-${{ steps.vars.outputs.version }}-linux-amd64.tar.gz
+            cd datapipe-offline-${{ steps.vars.outputs.version }}-linux-amd64
+            bash deploy.sh
+            ```
+
+            ### Verify Integrity
+            ```bash
+            sha256sum -c datapipe-offline-${{ steps.vars.outputs.version }}-linux-amd64.tar.gz.sha256
+            ```
+
+          files: |
+            ${{ steps.package.outputs.package_name }}.tar.gz
+            ${{ steps.package.outputs.package_name }}.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Summary
+        run: |
+          echo "## Offline Package Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Package Information" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: \`${{ steps.vars.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: \`${{ steps.vars.outputs.platform }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Monitoring: \`${{ steps.vars.outputs.include_monitoring }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Worker Replicas: \`${{ steps.vars.outputs.worker_replicas }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Included Images" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| datapipe-master | \`${{ steps.vars.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| datapipe-worker | \`${{ steps.vars.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| postgres | \`${{ env.POSTGRES_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| redis | \`${{ env.REDIS_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.vars.outputs.include_monitoring }}" = "true" ]; then
+            echo "| prometheus | \`${{ env.PROMETHEUS_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| grafana | \`${{ env.GRAFANA_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Package Size" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh ${{ steps.package.outputs.package_name }}.tar.gz >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
