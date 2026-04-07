@@ -171,12 +171,15 @@ jobs:
       - name: Generate image manifest
         run: |
           GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          INCLUDE_MONITORING_STR="${{ steps.vars.outputs.include_monitoring }}"
           python3 -c "
           import json
+          include_monitoring_str = '$INCLUDE_MONITORING_STR'
+          include_monitoring = include_monitoring_str.lower() == 'true'
           manifest = {
               'version': '${{ steps.vars.outputs.version }}',
               'platform': '${{ steps.vars.outputs.platform }}',
-              'generated_at': '${GENERATED_AT}',
+              'generated_at': '$GENERATED_AT',
               'images': {
                   'datapipe-master': {
                       'tag': '${{ steps.vars.outputs.version }}',
@@ -195,9 +198,9 @@ jobs:
                       'file': 'redis.tar.gz'
                   }
               },
-              'include_monitoring': ${{ steps.vars.outputs.include_monitoring == 'true' && 'True' || 'False' }}
+              'include_monitoring': include_monitoring
           }
-          if ${{ steps.vars.outputs.include_monitoring == 'true' }}:
+          if include_monitoring:
               manifest['images']['prometheus'] = {
                   'tag': '${{ env.PROMETHEUS_IMAGE }}',
                   'file': 'prometheus.tar.gz'
@@ -213,12 +216,14 @@ jobs:
 
       - name: Generate docker-compose for offline
         run: |
+          INCLUDE_MONITORING_STR="${{ steps.vars.outputs.include_monitoring }}"
           python3 -c "
           import yaml, json
 
           version = '${{ steps.vars.outputs.version }}'
           worker_replicas = int('${{ steps.vars.outputs.worker_replicas }}')
-          include_monitoring = ${{ steps.vars.outputs.include_monitoring == 'true' and 'True' or 'False' }}
+          include_monitoring_str = '$INCLUDE_MONITORING_STR'
+          include_monitoring = include_monitoring_str.lower() == 'true'
 
           compose = {
               'version': '3.8',
