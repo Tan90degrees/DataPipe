@@ -1,5 +1,10 @@
+# Build arguments for target platform (need to be first for all stages)
+ARG TARGETPLATFORM=linux/amd64
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM --platform=${TARGETPLATFORM} golang:1.23-alpine AS builder
 
 WORKDIR /build
 
@@ -11,14 +16,13 @@ RUN go mod download
 COPY cmd/worker ./cmd/worker
 COPY internal ./internal
 
-# Build arguments for target platform
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o datapipe-worker ./cmd/worker
 
 # Final stage
-FROM alpine:3.19
+FROM --platform=${TARGETPLATFORM} alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
 
