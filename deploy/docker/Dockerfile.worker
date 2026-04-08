@@ -11,7 +11,11 @@ RUN go mod download
 COPY cmd/worker ./cmd/worker
 COPY internal ./internal
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o datapipe-worker ./cmd/worker
+# Build arguments for target platform
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o datapipe-worker ./cmd/worker
 
 # Final stage
 FROM alpine:3.19
@@ -21,7 +25,6 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=builder /build/datapipe-worker .
-COPY --from=builder /build/internal ./internal
 
 RUN addgroup -g 1001 -S datapipe && \
     adduser -u 1001 -S datapipe -G datapipe

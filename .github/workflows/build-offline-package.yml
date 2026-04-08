@@ -131,8 +131,36 @@ jobs:
 
       - name: Build Docker images
         run: |
-          docker build -f deploy/docker/Dockerfile.master -t datapipe-master:${{ steps.vars.outputs.version }} .
-          docker build -f deploy/docker/Dockerfile.worker -t datapipe-worker:${{ steps.vars.outputs.version }} .
+          docker build --platform ${{ steps.vars.outputs.platform }} \
+            --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
+            --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
+            -f deploy/docker/Dockerfile.master \
+            -t datapipe-master:${{ steps.vars.outputs.version }} .
+          
+          docker build --platform ${{ steps.vars.outputs.platform }} \
+            --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
+            --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
+            -f deploy/docker/Dockerfile.worker \
+            -t datapipe-worker:${{ steps.vars.outputs.version }} .
+
+      - name: Verify Docker image architectures
+        run: |
+          echo "=== Master Image Architecture ==="
+          docker inspect datapipe-master:${{ steps.vars.outputs.version }} \
+            --format='{{.Os}}/{{.Architecture}}'
+          
+          echo ""
+          echo "=== Worker Image Architecture ==="
+          docker inspect datapipe-worker:${{ steps.vars.outputs.version }} \
+            --format='{{.Os}}/{{.Architecture}}'
+          
+          echo ""
+          echo "=== Master Image Contents ==="
+          docker run --rm --entrypoint=ls datapipe-master:${{ steps.vars.outputs.version }} -la /app/
+          
+          echo ""
+          echo "=== Worker Image Contents ==="
+          docker run --rm --entrypoint=ls datapipe-worker:${{ steps.vars.outputs.version }} -la /app/
 
       - name: Save application Docker images
         run: |
@@ -259,73 +287,6 @@ jobs:
                       'networks': ['datapipe-network'],
                       'restart': 'unless-stopped',
                   },
-                  'worker': {
-                      'image': f'datapipe-worker:{version}',
-                      'container_name': 'datapipe-worker',
-                      'ports': ['\${WORKER_METRICS_PORT:-9091}:9090'],
-                      'environment': [
-                          'LOG_LEVEL=\${LOG_LEVEL:-info}',
-                          'DB_HOST=postgresql',
-                          'DB_PORT=5432',
-                          'DB_NAME=\${DB_NAME:-datapipe}',
-                          'DB_USER=\${DB_USER:-datapipe}',
-                          'DB_PASSWORD=\${DB_PASSWORD:-datapipe123}',
-                          'DB_SSLMODE=disable',
-                          'REDIS_HOST=redis',
-                          'REDIS_PORT=6379',
-                          'REDIS_DB=0',
-                      ],
-                      'depends_on': {
-                          'postgresql': {'condition': 'service_healthy'},
-                          'redis': {'condition': 'service_healthy'},
-                      },
-                      'healthcheck': {
-                          'test': ['CMD', 'ps', 'aux'],
-                          'interval': '30s',
-                          'timeout': '5s',
-                          'retries': 3,
-                          'start_period': '10s',
-                      },
-                      'networks': ['datapipe-network'],
-                      'restart': 'unless-stopped',
-                      'deploy': {'replicas': worker_replicas},
-                  },
-                  'postgresql': {
-                      'image': 'postgres:15-alpine',
-                      'container_name': 'datapipe-postgresql',
-                      'ports': ['\${DB_EXTERNAL_PORT:-5432}:5432'],
-                      'environment': [
-                          'POSTGRES_DB=\${DB_NAME:-datapipe}',
-                          'POSTGRES_USER=\${DB_USER:-datapipe}',
-                          'POSTGRES_PASSWORD=\${DB_PASSWORD:-datapipe123}',
-                      ],
-                      'volumes': ['postgresql-data:/var/lib/postgresql/data'],
-                      'healthcheck': {
-                          'test': ['CMD-SHELL', 'pg_isready -U \${DB_USER:-datapipe} -d \${DB_NAME:-datapipe}'],
-                          'interval': '10s',
-                          'timeout': '5s',
-                          'retries': 5,
-                          'start_period': '10s',
-                      },
-                      'networks': ['datapipe-network'],
-                      'restart': 'unless-stopped',
-                  },
-                  'redis': {
-                      'image': 'redis:7-alpine',
-                      'container_name': 'datapipe-redis',
-                      'ports': ['\${REDIS_EXTERNAL_PORT:-6379}:6379'],
-                      'command': 'redis-server --appendonly yes',
-                      'volumes': ['redis-data:/data'],
-                      'healthcheck': {
-                          'test': ['CMD', 'redis-cli', 'ping'],
-                          'interval': '10s',
-                          'timeout': '5s',
-                          'retries': 5,
-                          'start_period': '5s',
-                      },
-                      'networks': ['datapipe-network'],
-                      'restart': 'unless-stopped',
-                  },
               },
               'networks': {
                   'datapipe-network': {'driver': 'bridge'},
@@ -334,6 +295,81 @@ jobs:
                   'postgresql-data': None,
                   'redis-data': None,
               },
+          }
+
+          worker_service = {
+              'image': f'datapipe-worker:{version}',
+              'container_name': 'datapipe-worker',
+              'environment': [
+                  'LOG_LEVEL=\${LOG_LEVEL:-info}',
+                  'DB_HOST=postgresql',
+                  'DB_PORT=5432',
+                  'DB_NAME=\${DB_NAME:-datapipe}',
+                  'DB_USER=\${DB_USER:-datapipe}',
+                  'DB_PASSWORD=\${DB_PASSWORD:-datapipe123}',
+                  'DB_SSLMODE=disable',
+                  'REDIS_HOST=redis',
+                  'REDIS_PORT=6379',
+                  'REDIS_DB=0',
+              ],
+              'depends_on': {
+                  'postgresql': {'condition': 'service_healthy'},
+                  'redis': {'condition': 'service_healthy'},
+              },
+              'healthcheck': {
+                  'test': ['CMD', 'ps', 'aux'],
+                  'interval': '30s',
+                  'timeout': '5s',
+                  'retries': 3,
+                  'start_period': '10s',
+              },
+              'networks': ['datapipe-network'],
+              'restart': 'unless-stopped',
+          }
+
+          if worker_replicas == 1:
+              worker_service['ports'] = ['\${WORKER_METRICS_PORT:-9091}:9090']
+              compose['services']['worker'] = worker_service
+          else:
+              worker_service['deploy'] = {'replicas': worker_replicas}
+              compose['services']['worker'] = worker_service
+
+          compose['services']['postgresql'] = {
+              'image': 'postgres:15-alpine',
+              'container_name': 'datapipe-postgresql',
+              'ports': ['\${DB_EXTERNAL_PORT:-5432}:5432'],
+              'environment': [
+                  'POSTGRES_DB=\${DB_NAME:-datapipe}',
+                  'POSTGRES_USER=\${DB_USER:-datapipe}',
+                  'POSTGRES_PASSWORD=\${DB_PASSWORD:-datapipe123}',
+              ],
+              'volumes': ['postgresql-data:/var/lib/postgresql/data'],
+              'healthcheck': {
+                  'test': ['CMD-SHELL', 'pg_isready -U \${DB_USER:-datapipe} -d \${DB_NAME:-datapipe}'],
+                  'interval': '10s',
+                  'timeout': '5s',
+                  'retries': 5,
+                  'start_period': '10s',
+              },
+              'networks': ['datapipe-network'],
+              'restart': 'unless-stopped',
+          }
+
+          compose['services']['redis'] = {
+              'image': 'redis:7-alpine',
+              'container_name': 'datapipe-redis',
+              'ports': ['\${REDIS_EXTERNAL_PORT:-6379}:6379'],
+              'command': 'redis-server --appendonly yes',
+              'volumes': ['redis-data:/data'],
+              'healthcheck': {
+                  'test': ['CMD', 'redis-cli', 'ping'],
+                  'interval': '10s',
+                  'timeout': '5s',
+                  'retries': 5,
+                  'start_period': '5s',
+              },
+              'networks': ['datapipe-network'],
+              'restart': 'unless-stopped',
           }
 
           if include_monitoring:
