@@ -129,19 +129,23 @@ jobs:
           mkdir -p offline-staging/ui
           cp -r ui/web/dist/* offline-staging/ui/
 
+      - name: Copy build artifacts for Docker
+        run: |
+          cp offline-staging/datapipe-master deploy/docker/
+          cp offline-staging/datapipe-worker deploy/docker/
+          cp -r offline-staging/ui deploy/docker/
+
       - name: Build Docker images
         run: |
-          docker build --platform ${{ steps.vars.outputs.platform }} \
-            --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
-            --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
+          docker build \
             -f deploy/docker/Dockerfile.master \
-            -t datapipe-master:${{ steps.vars.outputs.version }} .
+            -t datapipe-master:${{ steps.vars.outputs.version }} \
+            deploy/docker/
           
-          docker build --platform ${{ steps.vars.outputs.platform }} \
-            --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
-            --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
+          docker build \
             -f deploy/docker/Dockerfile.worker \
-            -t datapipe-worker:${{ steps.vars.outputs.version }} .
+            -t datapipe-worker:${{ steps.vars.outputs.version }} \
+            deploy/docker/
 
       - name: Verify Docker image architectures
         run: |

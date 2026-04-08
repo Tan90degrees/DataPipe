@@ -1,37 +1,4 @@
-# Build arguments for target platform (need to be first for all stages)
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-
-# Build stage for Go
-FROM golang:1.23-alpine AS go-builder
-
-WORKDIR /build
-
-RUN apk add --no-cache git
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY cmd/master ./cmd/master
-COPY internal ./internal
-
-ARG TARGETOS
-ARG TARGETARCH
-
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o datapipe-master ./cmd/master
-
-# Build stage for UI
-FROM node:18-alpine AS ui-builder
-
-WORKDIR /ui
-
-COPY ui/web/package*.json ./
-RUN npm ci
-
-COPY ui/web ./
-RUN npm run build
-
-# Final stage
+# Final stage - uses pre-built binaries from GitHub Actions
 FROM alpine:3.19
 
 RUN apk update && \
@@ -40,10 +7,7 @@ RUN apk update && \
 
 WORKDIR /app
 
-COPY --from=go-builder /build/datapipe-master .
-
-# Copy UI build artifacts
-COPY --from=ui-builder /ui/dist ./ui
+COPY datapipe-master .
 
 ENV UI_PATH=/app/ui
 
