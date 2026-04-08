@@ -132,14 +132,12 @@ jobs:
       - name: Build Docker images
         run: |
           docker build --platform ${{ steps.vars.outputs.platform }} \
-            --build-arg TARGETPLATFORM=${{ steps.vars.outputs.platform }} \
             --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
             --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
             -f deploy/docker/Dockerfile.master \
             -t datapipe-master:${{ steps.vars.outputs.version }} .
           
           docker build --platform ${{ steps.vars.outputs.platform }} \
-            --build-arg TARGETPLATFORM=${{ steps.vars.outputs.platform }} \
             --build-arg TARGETOS=${{ steps.vars.outputs.goos }} \
             --build-arg TARGETARCH=${{ steps.vars.outputs.goarch }} \
             -f deploy/docker/Dockerfile.worker \

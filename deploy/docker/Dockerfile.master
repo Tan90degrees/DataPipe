@@ -1,10 +1,9 @@
 # Build arguments for target platform (need to be first for all stages)
-ARG TARGETPLATFORM=linux/amd64
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 # Build stage for Go
-FROM --platform=${TARGETPLATFORM} golang:1.23-alpine AS go-builder
+FROM golang:1.23-alpine AS go-builder
 
 WORKDIR /build
 
@@ -22,7 +21,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o datapipe-master ./cmd/master
 
 # Build stage for UI
-FROM --platform=${TARGETPLATFORM} node:18-alpine AS ui-builder
+FROM node:18-alpine AS ui-builder
 
 WORKDIR /ui
 
@@ -33,7 +32,7 @@ COPY ui/web ./
 RUN npm run build
 
 # Final stage
-FROM --platform=${TARGETPLATFORM} alpine:3.19
+FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
 
