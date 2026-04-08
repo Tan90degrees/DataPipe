@@ -23,7 +23,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s
 # Final stage
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk update && \
+    apk add --no-cache ca-certificates tzdata && \
+    rm -rf /var/cache/apk/*
 
 WORKDIR /app
 
